@@ -281,4 +281,4 @@ Contributions are welcome! Feel free to open issues or submit PRs for:
 - New provider integrations
 - UI improvements
 - Performance optimizations
-- Documentation improvements
+- Documentation improvements 📃[Doc-link](https://docs.google.com/document/d/1KGyvg9gfjsiUuTR0sy9so8cETjxQT5h5/edit?usp=sharing&ouid=104443357622277225958&rtpof=true&sd=true)
