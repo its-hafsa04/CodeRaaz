@@ -103,6 +103,10 @@ exports.indexDirectory = async (req, res, next) => {
       return res.status(400).json({ error: 'Indexing is already in progress' });
     }
 
+    if (vectorDb.indexedDir && path.resolve(vectorDb.indexedDir) !== absoluteTargetDir) {
+      await vectorDb.clear();
+    }
+
     // Reset status
     setStatus({
       status: 'indexing',

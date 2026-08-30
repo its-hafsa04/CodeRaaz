@@ -6,7 +6,7 @@ import {
 import { queryStream } from '../utils/api';
 import type { Source } from '../utils/api';
 
-interface Message {
+export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
@@ -176,8 +176,12 @@ function renderMarkdown(text: string): string {
     .replace(/<p><\/p>/g, '');
 }
 
-export default function Chat() {
-  const [messages, setMessages] = useState<Message[]>([]);
+interface ChatProps {
+  messages: Message[];
+  setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
+}
+
+export default function Chat({ messages, setMessages }: ChatProps) {
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
