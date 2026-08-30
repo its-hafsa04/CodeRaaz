@@ -77,7 +77,7 @@
 ### 1. Clone & Setup
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/its-hafsa04/CodeRaaz.git
 cd AIcodeBase
 ```
 
@@ -155,7 +155,7 @@ Copy/Paste the following to `client/.env.local` and customize:
 ### Environment Variables
 
 ```env
-SERVER_URL=your-server-url
+VITE_SERVER_URL=your-server-url
 # Clerk Auth (Client & Server)
 VITE_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
 ```
@@ -281,4 +281,4 @@ Contributions are welcome! Feel free to open issues or submit PRs for:
 - New provider integrations
 - UI improvements
 - Performance optimizations
-- Documentation improvements
+- Documentation improvements 📃[Doc-link](https://docs.google.com/document/d/1KGyvg9gfjsiUuTR0sy9so8cETjxQT5h5/edit?usp=sharing&ouid=104443357622277225958&rtpof=true&sd=true)
