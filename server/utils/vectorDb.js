@@ -286,10 +286,15 @@ class VectorDb {
   }
 
   // Search top K closest chunks
-  async search(queryText, TopK = 4) {
+  async search(queryText, repoId, TopK = 4) {
     await this.init();
     
-    const countRow = await db.get("SELECT COUNT(*) as count FROM chunks");
+    if (!repoId) {
+       console.warn('No repoId provided to search.');
+       return [];
+    }
+
+    const countRow = await db.get("SELECT COUNT(*) as count FROM chunks WHERE repo_id = ?", [repoId]);
 
     // Handle disabled embeddings gracefully
     if (this.embeddingProvider === 'disabled') {
@@ -316,8 +321,8 @@ class VectorDb {
       return [];
     }
 
-    // 2. Fetch all chunks from SQLite
-    const chunks = await db.all("SELECT id, file_path, file_name, language, start_line, end_line, content, embedding FROM chunks WHERE embedding IS NOT NULL");
+    // 2. Fetch all chunks from SQLite for this repo
+    const chunks = await db.all("SELECT id, file_path, file_name, language, start_line, end_line, content, embedding FROM chunks WHERE repo_id = ? AND embedding IS NOT NULL", [repoId]);
 
     // 3. Compute similarity for each chunk in memory
     const results = chunks.map(chunk => {

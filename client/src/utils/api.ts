@@ -35,7 +35,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 // ---- Index ----
 export async function startIndexing(dirPath?: string) {
-  return request<{ message: string; targetDirectory: string }>('/index', {
+  return request<{ message: string; targetDirectory: string; repoId: string; sessionId: string }>('/index', {
     method: 'POST',
     body: JSON.stringify({ dirPath }),
   });
@@ -54,6 +54,8 @@ export interface IndexStatus {
   filesIndexed: number;
   chunksIndexed: number;
   lastIndexedAt: string | null;
+  repoId?: string;
+  sessionId?: string;
 }
 
 export async function getIndexStatus(): Promise<IndexStatus> {
@@ -89,8 +91,48 @@ export interface QueryStreamCallbacks {
   onError: (error: string) => void;
 }
 
+export interface Repo {
+  id: string;
+  name: string;
+  url: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatSession {
+  id: string;
+  repo_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
+export async function getRepositories(): Promise<Repo[]> {
+  return request<Repo[]>('/repos');
+}
+
+export async function getChatSessions(repoId: string): Promise<ChatSession[]> {
+  return request<ChatSession[]>(`/repos/${repoId}/chat-sessions`);
+}
+
+export async function createChatSession(repoId: string): Promise<ChatSession> {
+  return request<ChatSession>(`/repos/${repoId}/chat-sessions`, { method: 'POST' });
+}
+
+export async function getMessages(sessionId: string): Promise<ChatMessage[]> {
+  return request<ChatMessage[]>(`/chat-sessions/${sessionId}/messages`);
+}
+
 export function queryStream(
   query: string,
+  repoId: string,
+  sessionId: string,
   callbacks: QueryStreamCallbacks,
   TopK = 4
 ): () => void {
@@ -104,7 +146,7 @@ export function queryStream(
         'Content-Type': 'application/json',
         ...headers,
       },
-      body: JSON.stringify({ query, stream: true, TopK }),
+      body: JSON.stringify({ query, repoId, sessionId, stream: true, TopK }),
     }).then(async (res) => {
       if (!res.ok || !res.body) {
         const errText = await res.text().catch(() => '');

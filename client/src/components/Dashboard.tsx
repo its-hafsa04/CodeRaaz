@@ -10,7 +10,7 @@ import {
 } from '../utils/api';
 import type { IndexStatus, IndexFilesResponse } from '../utils/api';
 
-export default function Dashboard() {
+export default function Dashboard({ setActiveRepo }: { setActiveRepo?: (repoId: string, sessionId: string) => void }) {
   const [dirPath, setDirPath] = useState('');
   const [status, setStatus] = useState<IndexStatus | null>(null);
   const [filesData, setFilesData] = useState<IndexFilesResponse | null>(null);
@@ -19,6 +19,8 @@ export default function Dashboard() {
   const [filesExpanded, setFilesExpanded] = useState(false);
   const [polling, setPolling] = useState(false);
   const [indexPanelOpen, setIndexPanelOpen] = useState(false);
+  const [pendingRepoId, setPendingRepoId] = useState<string | null>(null);
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -56,7 +58,16 @@ export default function Dashboard() {
     setError('');
     setLoading(true);
     try {
-      await startIndexing(dirPath.trim() || undefined);
+      const res = await startIndexing(dirPath.trim() || undefined);
+      if (res?.repoId) {
+        setPendingRepoId(res.repoId);
+        localStorage.setItem('activeRepositoryId', res.repoId);
+      }
+      if (res?.sessionId) {
+        setPendingSessionId(res.sessionId);
+        localStorage.setItem('activeChatSessionId', res.sessionId);
+      }
+      if (res?.repoId && res?.sessionId) setActiveRepo?.(res.repoId, res.sessionId);
       setPolling(true);
       await fetchStatus();
       setIndexPanelOpen(true);
@@ -114,7 +125,15 @@ export default function Dashboard() {
               Point the assistant at a repo, then chat with the indexed project using AI-backed retrieval.
             </p>
           </div>
-          <button className="btn btn-secondary" onClick={() => document.getElementById('nav-chat')?.click()}>
+          <button className="btn btn-secondary" onClick={() => {
+            const repoId = status?.repoId || pendingRepoId;
+            const sessionId = status?.sessionId || pendingSessionId;
+            if (repoId && sessionId && setActiveRepo) {
+              setActiveRepo(repoId, sessionId);
+            } else {
+              document.getElementById('nav-chat')?.click();
+            }
+          }}>
             <MessageSquare size={16} /> Open Chat
           </button>
         </div>

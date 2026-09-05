@@ -103,13 +103,26 @@ exports.indexDirectory = async (req, res, next) => {
       return res.status(400).json({ error: 'Indexing is already in progress' });
     }
 
-    if (vectorDb.indexedDir && path.resolve(vectorDb.indexedDir) !== absoluteTargetDir) {
-      await vectorDb.clear();
+    const repoId = computeHash(absoluteTargetDir);
+    const repoName = sourceType === 'github' ? (parseGitHubRepoUrl(dirPath).repo) : path.basename(absoluteTargetDir);
+    const now = new Date().toISOString();
+
+    // Ensure repo exists
+    await db.run('INSERT OR IGNORE INTO repositories (id, name, url, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [repoId, repoName, dirPath || absoluteTargetDir, now, now]);
+
+    // Ensure at least one chat session exists
+    let activeSession = await db.get('SELECT id FROM chat_sessions WHERE repo_id = ? ORDER BY created_at DESC LIMIT 1', [repoId]);
+    if (!activeSession) {
+      const sessionId = crypto.randomUUID();
+      await db.run('INSERT INTO chat_sessions (id, repo_id, created_at, updated_at) VALUES (?, ?, ?, ?)', [sessionId, repoId, now, now]);
+      activeSession = { id: sessionId };
     }
 
     // Reset status
     setStatus({
       status: 'indexing',
+      repoId,
+      sessionId: activeSession.id,
       progress: { processed: 0, total: 0 },
       error: null,
       filesIndexed: 0,
@@ -122,7 +135,9 @@ exports.indexDirectory = async (req, res, next) => {
       message: 'Incremental indexing started successfully',
       targetDirectory: absoluteTargetDir,
       sourceType,
-      statusUrl: '/api/index/status'
+      statusUrl: '/api/index/status',
+      repoId,
+      sessionId: activeSession.id
     });
 
     // Run background worker
@@ -155,7 +170,7 @@ exports.indexDirectory = async (req, res, next) => {
         console.log(`Scanned ${diskFiles.length} files on disk.`);
 
         // 2. Fetch existing files from database
-        const dbFiles = await db.all("SELECT path, hash FROM files");
+        const dbFiles = await db.all("SELECT path, hash FROM files WHERE repo_id = ?", [repoId]);
         const dbFileMap = new Map();
         dbFiles.forEach(f => dbFileMap.set(f.path, f.hash));
 
@@ -199,7 +214,7 @@ exports.indexDirectory = async (req, res, next) => {
         if (deletedFiles.length > 0) {
           // SQL.js cascade delete will remove chunks automatically
           for (const delPath of deletedFiles) {
-            await db.run("DELETE FROM files WHERE path = ?", [delPath]);
+            await db.run("DELETE FROM files WHERE repo_id = ? AND path = ?", [repoId, delPath]);
           }
           console.log(`Removed ${deletedFiles.length} obsolete file records.`);
         }
@@ -208,7 +223,7 @@ exports.indexDirectory = async (req, res, next) => {
         const newChunks = [];
         for (const fileToProc of filesToProcess) {
           // Cascade delete existing chunks for modified files before inserting new ones
-          await db.run("DELETE FROM files WHERE path = ?", [fileToProc.relativePath]);
+          await db.run("DELETE FROM files WHERE repo_id = ? AND path = ?", [repoId, fileToProc.relativePath]);
 
           const fileChunks = codeSplitter.chunkFile(
             fileToProc.relativePath,
@@ -224,7 +239,8 @@ exports.indexDirectory = async (req, res, next) => {
           } else {
             // If the file has no valid chunks, still record the file to prevent re-processing
             const now = new Date().toISOString();
-            await db.run("INSERT OR REPLACE INTO files (path, hash, last_indexed) VALUES (?, ?, ?)", [
+            await db.run("INSERT OR REPLACE INTO files (repo_id, path, hash, last_indexed) VALUES (?, ?, ?, ?)", [
+              repoId,
               fileToProc.relativePath,
               fileToProc.hash,
               now
@@ -264,7 +280,8 @@ exports.indexDirectory = async (req, res, next) => {
           let embeddingIndex = 0;
           for (const item of newChunks) {
             // Save file record
-            await db.run("INSERT OR REPLACE INTO files (path, hash, last_indexed) VALUES (?, ?, ?)", [
+            await db.run("INSERT OR REPLACE INTO files (repo_id, path, hash, last_indexed) VALUES (?, ?, ?, ?)", [
+              repoId,
               item.relativePath,
               item.hash,
               now
@@ -281,8 +298,8 @@ exports.indexDirectory = async (req, res, next) => {
                 const chunkId = chunk.filePath + '_' + chunk.startLine + '_' + embeddingIndex;
 
                 dbInstance.run(
-                  'INSERT INTO chunks (id, file_path, file_name, language, start_line, end_line, content, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                  [chunkId, chunk.filePath, chunk.fileName, chunk.language, chunk.startLine, chunk.endLine, chunk.content, embeddingBuffer]
+                  'INSERT INTO chunks (id, repo_id, file_path, file_name, language, start_line, end_line, content, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                  [chunkId, repoId, chunk.filePath, chunk.fileName, chunk.language, chunk.startLine, chunk.endLine, chunk.content, embeddingBuffer]
                 );
               } else {
                 // Store chunk without embedding (partial indexing)
@@ -293,8 +310,8 @@ exports.indexDirectory = async (req, res, next) => {
                 const emptyBuffer = Buffer.from(emptyEmbedding.buffer);
 
                 dbInstance.run(
-                  'INSERT INTO chunks (id, file_path, file_name, language, start_line, end_line, content, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                  [chunkId, chunk.filePath, chunk.fileName, chunk.language, chunk.startLine, chunk.endLine, chunk.content, emptyBuffer]
+                  'INSERT INTO chunks (id, repo_id, file_path, file_name, language, start_line, end_line, content, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                  [chunkId, repoId, chunk.filePath, chunk.fileName, chunk.language, chunk.startLine, chunk.endLine, chunk.content, emptyBuffer]
                 );
               }
             }

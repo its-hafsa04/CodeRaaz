@@ -315,12 +315,14 @@ class RagEngine {
    */
   async queryStream(queryText, options = {}, onChunk) {
     const topK = Math.min(options.topK || 4, 8);
+    const repoId = options.repoId;
+    const chatHistory = options.chatHistory || [];
 
     // 1. Search vector database
     let searchResults = [];
 
     try {
-      searchResults = await vectorDb.search(queryText, topK);
+      searchResults = await vectorDb.search(queryText, repoId, topK);
     } catch (err) {
       console.error("Error querying vector DB:", err);
     }
@@ -387,6 +389,14 @@ GUIDELINES:
 9. Never claim that something exists in the repository unless the provided context supports that claim.
 `.trim();
 
+    // Format chat history
+    let historyStr = "";
+    if (chatHistory.length > 0) {
+      historyStr = "\n\n================ CHAT HISTORY ================\n\n" + 
+        chatHistory.map(msg => `${msg.role.toUpperCase()}: ${msg.content}`).join("\n\n") + 
+        "\n\n================ END CHAT HISTORY ================\n\n";
+    }
+
     // 4. User prompt
     let userPrompt = "";
 
@@ -399,7 +409,7 @@ Below are code snippets retrieved from the user's repository.
 ${contextStr}
 
 ================ END REPOSITORY CONTEXT ================
-
+${historyStr}
 User Question:
 ${queryText}
 
@@ -408,7 +418,7 @@ Analyze the retrieved repository context and provide the most accurate answer po
     } else {
       userPrompt = `
 No relevant repository code was retrieved for this question.
-
+${historyStr}
 User Question:
 ${queryText}
 

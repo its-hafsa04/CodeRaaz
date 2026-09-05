@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   Send, Bot, User, FileCode, ChevronDown, ChevronUp,
-  Zap, Sparkles, X, ExternalLink
+  Zap, Sparkles, X, ExternalLink, FolderOpen
 } from 'lucide-react';
 import { queryStream } from '../utils/api';
-import type { Source } from '../utils/api';
+import type { Repo, Source } from '../utils/api';
 
 export interface Message {
   id: string;
@@ -179,11 +179,16 @@ function renderMarkdown(text: string): string {
 interface ChatProps {
   messages: Message[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
+  activeRepoId: string | null;
+  activeSessionId: string | null;
+  activeRepository: Repo | null;
+  setActiveRepo?: (repoId: string, sessionId: string) => void;
 }
 
-export default function Chat({ messages, setMessages }: ChatProps) {
+export default function Chat({ messages, setMessages, activeRepoId, activeSessionId, activeRepository, setActiveRepo }: ChatProps) {
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [chatError, setChatError] = useState('');
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -193,6 +198,24 @@ export default function Chat({ messages, setMessages }: ChatProps) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => {
+    import('../utils/api').then(({ getMessages }) => {
+      if (activeSessionId) {
+        getMessages(activeSessionId).then(msgs => {
+          setMessages(msgs.map(m => ({
+            id: m.id,
+            role: m.role,
+            content: m.content
+          })));
+        }).catch(() => {
+          setMessages([]);
+        });
+      } else {
+        setMessages([]);
+      }
+    });
+  }, [activeSessionId, setMessages]);
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -200,10 +223,15 @@ export default function Chat({ messages, setMessages }: ChatProps) {
     }
   }
 
-  function sendMessage() {
-    const text = input.trim();
+  function sendMessage(prompt?: string) {
+    const text = (prompt ?? input).trim();
     if (!text || isStreaming) return;
+    if (!activeRepoId || !activeSessionId) {
+      setChatError('Please embed or select a repository before starting a chat.');
+      return;
+    }
 
+    setChatError('');
     const userMsg: Message = {
       id: `u-${Date.now()}`,
       role: 'user',
@@ -219,11 +247,12 @@ export default function Chat({ messages, setMessages }: ChatProps) {
     };
 
     setMessages(prev => [...prev, userMsg, assistantMsg]);
-    setInput('');
     setIsStreaming(true);
 
     cancelRef.current = queryStream(
       text,
+      activeRepoId || '',
+      activeSessionId || '',
       {
         onChunk: (chunk) => {
           setMessages(prev =>
@@ -234,6 +263,7 @@ export default function Chat({ messages, setMessages }: ChatProps) {
           setMessages(prev =>
             prev.map(m => m.id === assistantId ? { ...m, streaming: false, sources } : m)
           );
+          setInput('');
           setIsStreaming(false);
           cancelRef.current = null;
         },
@@ -241,9 +271,11 @@ export default function Chat({ messages, setMessages }: ChatProps) {
           setMessages(prev =>
             prev.map(m => m.id === assistantId ? {
               ...m, streaming: false,
-              content: m.content || `⚠️ Error: ${err}`
+              content: m.content || 'I could not analyze the repository right now. Please try again.'
             } : m)
           );
+          console.error('Chat request failed:', err);
+          setChatError('I could not analyze the repository right now. Your question is still here so you can retry.');
           setIsStreaming(false);
           cancelRef.current = null;
         },
@@ -259,6 +291,34 @@ export default function Chat({ messages, setMessages }: ChatProps) {
     }
   }
 
+  const [repos, setRepos] = useState<{ id: string, name: string, url: string }[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  useEffect(() => {
+    if (historyOpen) {
+      import('../utils/api').then(({ getRepositories }) => {
+        getRepositories().then(setRepos).catch(console.error);
+      });
+    }
+  }, [historyOpen]);
+
+  async function selectRepo(repoId: string) {
+    const { getChatSessions, createChatSession } = await import('../utils/api');
+    try {
+      const existing = await getChatSessions(repoId);
+      if (existing.length > 0) {
+        setActiveRepo?.(repoId, existing[0].id);
+      } else {
+        const newSession = await createChatSession(repoId);
+        setActiveRepo?.(repoId, newSession.id);
+      }
+    } catch (err) {
+      console.error(err);
+      setChatError('We could not switch to that repository. Please try again.');
+    }
+    setHistoryOpen(false);
+  }
+
   return (
     <div className="chat-page">
       {/* Source Panel (right side) */}
@@ -268,32 +328,91 @@ export default function Chat({ messages, setMessages }: ChatProps) {
 
       <div className={`chat-main ${selectedSource ? 'chat-main-shifted' : ''}`}>
         {/* Chat Header */}
-        <div className="chat-header">
-          <div className="flex items-center gap-3">
-            <div className="chat-header-icon">
-              <Sparkles size={18} />
-            </div>
-            <div>
-              <h3 style={{ color: 'var(--text-primary)' }}>AI Chat Workspace</h3>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              id="clear-chat-btn"
-              className="btn btn-ghost btn-sm"
-              onClick={() => setMessages([])}
-              title="Clear chat"
-            >
-              <X size={14} /> Clear
-            </button>
-            {isStreaming && (
-              <button id="cancel-streaming-btn" className="btn btn-ghost btn-sm" onClick={cancelStreaming}>
-                <X size={14} /> Cancel
-              </button>
-            )}
-          </div>
+        <div className="chat-header" style={{ position: 'relative', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+  <div className="flex items-center gap-3">
+    <div className="chat-header-icon">
+      <Sparkles size={18} />
+    </div>
+    <div>
+      <h3 style={{ color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+        <div>
+          <div>AI Repository Assistant</div>
+          <span style={{ display: 'block', fontSize: '0.72rem', fontWeight: 400, color: 'var(--text-muted)', marginTop: 2 }}>
+            Ask questions about your codebase
+          </span>
         </div>
+        {activeRepository && (
+          <span className="badge badge-success" title={activeRepository.url}>
+            <span aria-hidden="true">●</span> {activeRepository.name} · Ready
+          </span>
+        )}
+      </h3>
+    </div>
+  </div>
 
+  <div style={{ display: 'flex', gap: 8, alignItems: 'center', position: 'relative' }}>
+    {/* History Button & Dropdown */}
+    <div style={{ position: 'relative' }}>
+      <button 
+        className="btn btn-ghost btn-sm" 
+        onClick={() => setHistoryOpen(!historyOpen)}
+        style={{ padding: '4px 8px' }}
+      >
+        <FolderOpen size={14} /> History <ChevronDown size={14} />
+      </button>
+
+      {historyOpen && (
+        <div style={{
+          position: 'absolute', top: '100%', right: 0, marginTop: '8px',
+          background: 'var(--bg-sidebar)', border: '1px solid var(--border-subtle)',
+          borderRadius: '8px', padding: '12px', zIndex: 100,
+          width: '280px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
+        }}>
+          <h4 style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--text-muted)' }}>Repository History</h4>
+          {repos.length === 0 ? (
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>No repositories found.</div>
+          ) : (
+            repos.map(r => (
+              <button 
+                key={r.id}
+                className="btn btn-ghost"
+                style={{ width: '100%', justifyContent: 'flex-start', padding: '8px', fontSize: '0.85rem' }}
+                onClick={() => selectRepo(r.id)}
+              >
+                <FolderOpen size={14} /> {r.name}
+                {r.id === activeRepoId && <span className="badge badge-success" style={{ marginLeft: 'auto', fontSize: '0.65rem' }}>Active</span>}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+
+    {/* New Chat Button */}
+    <button
+      id="clear-chat-btn"
+      className="btn btn-ghost btn-sm"
+      onClick={async () => {
+        if (activeRepoId) {
+           const { createChatSession } = await import('../utils/api');
+           const session = await createChatSession(activeRepoId);
+           setActiveRepo?.(activeRepoId, session.id);
+           setMessages([]);
+        }
+      }}
+      title="New Chat"
+    >
+      <Zap size={14} /> New Chat
+    </button>
+
+    {/* Cancel Streaming Button */}
+    {isStreaming && (
+      <button id="cancel-streaming-btn" className="btn btn-ghost btn-sm" onClick={cancelStreaming}>
+        <X size={14} /> Cancel
+      </button>
+    )}
+  </div>
+</div>
         {/* Messages */}
         <div className="chat-messages">
           {messages.length === 0 && (
@@ -302,28 +421,42 @@ export default function Chat({ messages, setMessages }: ChatProps) {
                 <Bot size={40} />
               </div>
               <h3 style={{ color: 'var(--text-primary)', marginBottom: 8 }}>
-                Ready to explore your codebase
+                {activeRepoId ? 'Ready to explore your codebase' : 'Explore your repository with AI'}
               </h3>
               <p style={{ fontSize: '0.875rem', maxWidth: 420, textAlign: 'center', lineHeight: 1.6 }}>
-                Ask questions about your indexed code. I'll retrieve the most relevant snippets and provide context-aware answers.
+                {activeRepoId
+                  ? `You're now chatting with ${activeRepository?.name || 'your repository'}. Ask anything about your indexed code.`
+                  : 'Embed a repository to start asking questions about your codebase.'}
               </p>
-              <div className="chat-suggestions">
-                {[
-                  'How does user authentication work?',
-                  'Explain the indexing pipeline',
-                  'Where are embeddings stored?',
-                  'How does the RAG engine work?',
-                ].map((q, i) => (
-                  <button
-                    key={i}
-                    id={`suggestion-${i}`}
-                    className="btn btn-ghost btn-sm suggestion-btn"
-                    onClick={() => { setInput(q); textareaRef.current?.focus(); }}
-                  >
-                    <Zap size={12} /> {q}
+              {activeRepoId ? (
+                <div className="chat-suggestions">
+                  {[
+                    'What does this project do?',
+                    'Explain the project architecture.',
+                    'Where is authentication implemented?',
+                    'How does the API work?',
+                    'Find potential bugs in this repository.',
+                  ].map((q, i) => (
+                    <button
+                      key={i}
+                      id={`suggestion-${i}`}
+                      className="btn btn-ghost btn-sm suggestion-btn"
+                      onClick={() => { setInput(q); sendMessage(q); }}
+                    >
+                      <Zap size={12} /> {q}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <button className="btn btn-primary btn-sm" onClick={() => document.getElementById('nav-dashboard')?.click()}>
+                    <FolderOpen size={14} /> Embed Repository
                   </button>
-                ))}
-              </div>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setHistoryOpen(true)}>
+                    Select from History
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -339,22 +472,23 @@ export default function Chat({ messages, setMessages }: ChatProps) {
 
         {/* Input Area */}
         <div className="chat-input-area">
+          {chatError && <div className="alert-error fade-in" style={{ marginBottom: 10 }}>{chatError}</div>}
           <div className="chat-input-wrap">
             <textarea
               id="chat-input"
               ref={textareaRef}
               className="chat-textarea"
-              placeholder="Ask about your codebase… (Enter to send, Shift+Enter for newline)"
+              placeholder={activeRepoId ? 'Ask anything about your repository...' : 'Select a repository to start chatting...'}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               rows={1}
-              disabled={isStreaming}
+              disabled={!activeRepoId || isStreaming}
             />
             <button
               id="send-message-btn"
               className="btn btn-primary chat-send-btn"
-              onClick={sendMessage}
+              onClick={() => sendMessage()}
               disabled={!input.trim() || isStreaming}
               title="Send (Enter)"
             >

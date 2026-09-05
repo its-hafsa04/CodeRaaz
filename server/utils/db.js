@@ -25,19 +25,79 @@ async function getDb() {
     dbInstance = new SQL.Database(fileBuffer);
   } else {
     dbInstance = new SQL.Database();
-    
-    // Create schema
+  }
+
+  // Create new tables and migrate old ones if needed
+  dbInstance.run(`
+    CREATE TABLE IF NOT EXISTS repositories (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      url TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
+  dbInstance.run(`
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id TEXT PRIMARY KEY,
+      repo_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
+    );
+  `);
+
+  dbInstance.run(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+    );
+  `);
+
+  // Check that both index tables use the current repository-aware schema.
+  let needMigration = false;
+  try {
+    const requiredColumns = {
+      files: ['repo_id', 'path', 'hash', 'last_indexed'],
+      chunks: ['id', 'repo_id', 'file_path', 'file_name', 'language', 'start_line', 'end_line', 'content', 'embedding']
+    };
+
+    for (const [tableName, columns] of Object.entries(requiredColumns)) {
+      const tableInfo = dbInstance.exec(`PRAGMA table_info(${tableName})`);
+      const existingColumns = tableInfo[0]?.values?.map(column => column[1]) || [];
+      if (!columns.every(column => existingColumns.includes(column))) {
+        needMigration = true;
+        break;
+      }
+    }
+  } catch (err) {
+    needMigration = true;
+  }
+
+  if (needMigration) {
+    dbInstance.run("DROP TABLE IF EXISTS chunks;");
+    dbInstance.run("DROP TABLE IF EXISTS files;");
+
     dbInstance.run(`
-      CREATE TABLE IF NOT EXISTS files (
-        path TEXT PRIMARY KEY,
+      CREATE TABLE files (
+        repo_id TEXT NOT NULL,
+        path TEXT NOT NULL,
         hash TEXT NOT NULL,
-        last_indexed TEXT NOT NULL
+        last_indexed TEXT NOT NULL,
+        PRIMARY KEY (repo_id, path),
+        FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
       );
     `);
     
     dbInstance.run(`
-      CREATE TABLE IF NOT EXISTS chunks (
+      CREATE TABLE chunks (
         id TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
         file_path TEXT NOT NULL,
         file_name TEXT NOT NULL,
         language TEXT NOT NULL,
@@ -45,23 +105,25 @@ async function getDb() {
         end_line INTEGER NOT NULL,
         content TEXT NOT NULL,
         embedding BLOB NOT NULL,
-        FOREIGN KEY (file_path) REFERENCES files(path) ON DELETE CASCADE
+        FOREIGN KEY (repo_id, file_path) REFERENCES files(repo_id, path) ON DELETE CASCADE,
+        FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
       );
     `);
-    
-    dbInstance.run(`
-      CREATE TABLE IF NOT EXISTS metadata (
-        key TEXT PRIMARY KEY,
-        value TEXT
-      );
-    `);
-    
-    dbInstance.run("PRAGMA foreign_keys = ON;");
-    save();
   }
 
-  // Ensure foreign keys are enabled for the current connection
+  dbInstance.run(`
+    CREATE TABLE IF NOT EXISTS metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
+  
+  // Ensure foreign keys are enabled
   dbInstance.run("PRAGMA foreign_keys = ON;");
+  
+  if (!fs.existsSync(config.DB_PATH) || needMigration) {
+    save();
+  }
 
   return dbInstance;
 }
